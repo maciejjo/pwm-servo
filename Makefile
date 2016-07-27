@@ -1,9 +1,14 @@
-ifneq ($(KERNELRELEASE),)
-	obj-m := servo.o
-else
-	KDIR ?= /lib/modules/`uname -r`/build
+obj-m := servo.o
 
-default:
-	        $(MAKE) -C $(KDIR) M=$$PWD
+SRC := $(shell pwd)
 
-endif
+all:
+	$(MAKE) -C $(KERNEL_SRC) M=$(SRC)
+
+modules_install:
+	$(MAKE) -C $(KERNEL_SRC) M=$(SRC) modules_install
+
+clean:
+	rm -f *.o *~ core .depend .*.cmd *.ko *.mod.c
+	rm -f Module.markers Module.symvers modules.order
+	rm -rf .tmp_versions Modules.symvers
