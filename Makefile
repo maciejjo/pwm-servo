@@ -1,5 +1,9 @@
-obj-m += servo.o
-all:
-	make -C /lib/modules/$(shell uname -r)/build M=$(shell pwd) modules
-clean:
-	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) clean
+ifneq ($(KERNELRELEASE),)
+	obj-m := servo.o
+else
+	KDIR ?= /lib/modules/`uname -r`/build
+
+default:
+	        $(MAKE) -C $(KDIR) M=$$PWD
+
+endif
