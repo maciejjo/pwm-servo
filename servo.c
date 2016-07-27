@@ -1,94 +1,160 @@
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/device.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
 #include <linux/pwm.h>
+#include <linux/pinctrl/consumer.h>
 
-#define DRVNAME "SERVO"
+#define SERVO_PWM_PERIOD  20000000
+#define SERVO_MAX_DUTY    2500000
+#define SERVO_MIN_DUTY    500000
+#define SERVO_DEGREE ((SERVO_MAX_DUTY - SERVO_MIN_DUTY) / 180)
 
-#define ANGLE_PWM	4 /* P9_16 */
-#define PWM_PERIOD	20000000
-#define MAX_DUTY	2500000
-#define MIN_DUTY	500000
-/* it isn't joke
- * pwm = MIN_DUTY + (MAX_DUTY - MIN_DUTY) * (angle / 180)
- * pwm = MIN_DUTY + ((MAX_DUTY - MIN_DUTY) / 180) * angle
- * MAX_DUTY - MIN_DUTY) / 180- this is constant
- * (2500000 - 500000) / 180 = 2000000 / 180 = 11111,(1) what was rounded to 11111 */
-#define ANGLE_CONST	11111
+struct pwm_servo_data {
+	struct pwm_device *pwm;
+	unsigned int angle;
+	unsigned int angle_duty;
+};
 
-static unsigned int angle = 0;
-static unsigned int angle_duty = MIN_DUTY;
-static struct class *servo_class;
-static struct pwm_device *angle_pwm;
-
-/* show and store functions declarations */
-static ssize_t angle_show(struct class *cls, struct class_attribute *attr, char *buf);
-static ssize_t angle_store(struct class *cls, struct class_attribute *attr, const char *buf, size_t count);
-
-/* attributes */
-static struct class_attribute angle_attr = __ATTR(angle, 0660, angle_show, angle_store);
-
-static ssize_t angle_show(struct class *cls, struct class_attribute *attr, char *buf)
+static ssize_t pwm_servo_show_angle(struct device *dev,
+	struct device_attribute *attr, char *buf)
 {
-	return sprintf(buf, "%u", angle);
+	struct pwm_servo_data *servo =
+		platform_get_drvdata(to_platform_device(dev));
+
+	return sprintf(buf, "%u\n", servo->angle);
 }
 
-static ssize_t angle_store(struct class *cls, struct class_attribute *attr, const char *buf, size_t count)
+static ssize_t pwm_servo_store_angle(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
 {
-	unsigned int tmp;
-	sscanf(buf, "%u", &tmp);
-	if(tmp < 0 || tmp > 180)return -EINVAL;
-	angle = tmp;
-	angle_duty = MIN_DUTY + ANGLE_CONST * angle;
-	pwm_config(angle_pwm, angle_duty, PWM_PERIOD);
+	unsigned long tmp;
+	int error;
+	struct pwm_servo_data *servo =
+		platform_get_drvdata(to_platform_device(dev));
+
+	error = kstrtoul(buf, 10, &tmp);
+
+	if (error < 0)
+		return error;
+
+	if (tmp < 0 || tmp > 180)
+		return -EINVAL;
+
+	error = pwm_config(servo->pwm, SERVO_MIN_DUTY +
+			SERVO_DEGREE * tmp, SERVO_PWM_PERIOD);
+	if (error < 0)
+		return error;
+
+	servo->angle = tmp;
+	servo->angle_duty = SERVO_MIN_DUTY + SERVO_DEGREE * tmp;
+
 	return count;
 }
 
-static int __init servo_init(void)
+static DEVICE_ATTR(angle, S_IWUSR | S_IRUGO, pwm_servo_show_angle,
+		pwm_servo_store_angle);
+
+static struct attribute *pwm_servo_attributes[] = {
+	&dev_attr_angle.attr,
+	NULL,
+};
+
+static const struct attribute_group pwm_servo_group = {
+	.attrs = pwm_servo_attributes,
+};
+
+static int pwm_servo_probe(struct platform_device *pdev)
 {
-	/* create entried in sysfs */
-	servo_class = class_create(THIS_MODULE, "servo");
-	if(servo_class == NULL){
-		printk(KERN_ERR "%s: Cannot create entry in sysfs", DRVNAME);
-		return -1;
+	struct device *dev = &pdev->dev;
+	struct pinctrl *pinctrl;
+	struct device_node *node = dev->of_node;
+	struct pwm_servo_data *servo;
+	int error = 0;
+
+	if (node == NULL) {
+		dev_err(dev, "Non DT platforms not supported\n");
+		return -EINVAL;
 	}
-	
-	if(class_create_file(servo_class, &angle_attr) != 0){
-		printk(KERN_ERR "%s: Cannot create sysfs attribute\n", DRVNAME);
-		goto err1;
+
+	pinctrl = devm_pinctrl_get_select_default(&pdev->dev);
+	if (IS_ERR(pinctrl))
+		dev_warn(&pdev->dev, "Unable to select pin group\n");
+
+	servo = devm_kzalloc(&pdev->dev, sizeof(*servo), GFP_KERNEL);
+	if (!servo)
+		return -ENOMEM;
+
+	servo->pwm = devm_pwm_get(&pdev->dev, NULL);
+	if (IS_ERR(servo->pwm)) {
+		dev_err(&pdev->dev, "devm_pwm_get() failed\n");
+		return error;
 	}
-	
-	angle_pwm = pwm_request(ANGLE_PWM, "angle_pwm");
-	if(angle_pwm == NULL)
-	{
-		printk(KERN_ERR "%s: Cannot use PWM output P8_13\n", DRVNAME);
-		goto err2;
+
+	servo->angle = 0;
+	servo->angle_duty = SERVO_MIN_DUTY;
+
+	error = pwm_config(servo->pwm, servo->angle_duty, SERVO_PWM_PERIOD);
+	if (error) {
+		dev_err(&pdev->dev, "pwm_config() failed\n");
+		return error;
 	}
-	pwm_config(angle_pwm, angle_duty, PWM_PERIOD);
-	pwm_set_polarity(angle_pwm, PWM_POLARITY_NORMAL);
-	pwm_enable(angle_pwm);
+
+	error = pwm_set_polarity(servo->pwm, PWM_POLARITY_NORMAL);
+	if (error) {
+		dev_err(&pdev->dev, "pwm_set_polarity() failed\n");
+		return error;
+	}
+
+	error = pwm_enable(servo->pwm);
+	if (error) {
+		dev_err(&pdev->dev, "pwm_enable() failed\n");
+		return error;
+	}
+
+	platform_set_drvdata(pdev, servo);
+
+	error = sysfs_create_group(&pdev->dev.kobj, &pwm_servo_group);
+	if (error) {
+		dev_err(&pdev->dev, "sysfs_create_group() failed (%d)\n",
+				error);
+		return error;
+	}
+
 	return 0;
-	
-	err2:
-	class_remove_file(servo_class, &angle_attr);
-	err1:
-	class_destroy(servo_class);
-	return -1;
 }
 
-static void __exit servo_exit(void)
+static int pwm_servo_remove(struct platform_device *pdev)
 {
-	pwm_config(angle_pwm, 0, 0);
-	pwm_disable(angle_pwm);
-	pwm_free(angle_pwm);
+	struct pwm_servo_data *servo = platform_get_drvdata(pdev);
 
-	class_remove_file(servo_class, &angle_attr);
-	class_destroy(servo_class);
+	pwm_disable(servo->pwm);
+
+	return 0;
 }
 
-module_init(servo_init);
-module_exit(servo_exit);
+#ifdef CONFIG_OF
+static const struct of_device_id pwm_servo_match[] = {
+	{ .compatible = "pwm_servo", },
+	{ },
+};
+MODULE_DEVICE_TABLE(of, pwm_servo_match);
+#endif
 
-MODULE_AUTHOR("Adam Olek");
-MODULE_DESCRIPTION("Servo driver");
+static struct platform_driver pwm_servo_driver = {
+	.probe	= pwm_servo_probe,
+	.remove = pwm_servo_remove,
+	.driver = {
+		.name	= "pwm-servo",
+#ifdef CONFIG_OF
+		.of_match_table = of_match_ptr(pwm_servo_match),
+#endif
+	},
+};
+module_platform_driver(pwm_servo_driver);
+
+MODULE_AUTHOR("Adam Olek, Maciej Sobkowski <maciejjo@maciejjo.pl>");
+MODULE_DESCRIPTION("PWM Servo driver");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:pwm-servo");
