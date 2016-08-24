@@ -76,7 +76,7 @@ static ssize_t pwm_servo_store_standby(struct device *dev,
 	if (error < 0)
 		return error;
 
-	if (tmp != 0 || tmp != 1)
+	if (tmp != 0 && tmp != 1)
 		return -EINVAL;
 
 	if (tmp == 0 && servo->standby != 0)
