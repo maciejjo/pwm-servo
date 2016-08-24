@@ -15,6 +15,7 @@ struct pwm_servo_data {
 	struct pwm_device *pwm;
 	unsigned int angle;
 	unsigned int angle_duty;
+	unsigned int standby;
 };
 
 static ssize_t pwm_servo_show_angle(struct device *dev,
@@ -53,11 +54,52 @@ static ssize_t pwm_servo_store_angle(struct device *dev,
 	return count;
 }
 
+static ssize_t pwm_servo_show_standby(struct device *dev,
+	struct device_attribute *attr, char *buf)
+{
+	struct pwm_servo_data *servo =
+		platform_get_drvdata(to_platform_device(dev));
+
+	return sprintf(buf, "%u\n", servo->standby);
+}
+
+static ssize_t pwm_servo_store_standby(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	unsigned long tmp;
+	int error;
+	struct pwm_servo_data *servo =
+		platform_get_drvdata(to_platform_device(dev));
+
+	error = kstrtoul(buf, 10, &tmp);
+
+	if (error < 0)
+		return error;
+
+	if (tmp != 0 || tmp != 1)
+		return -EINVAL;
+
+	if (tmp == 0 && servo->standby != 0)
+		pwm_disable(servo->pwm);
+	else if (tmp == 1 && servo->standby != 1) {
+		error = pwm_enable(servo->pwm);
+		if (error)
+			return error;
+	}
+
+	servo->standby = tmp;
+
+	return count;
+}
+
 static DEVICE_ATTR(angle, S_IWUSR | S_IRUGO, pwm_servo_show_angle,
 		pwm_servo_store_angle);
+static DEVICE_ATTR(standby, S_IWUSR | S_IRUGO, pwm_servo_show_standby,
+		pwm_servo_store_standby);
 
 static struct attribute *pwm_servo_attributes[] = {
 	&dev_attr_angle.attr,
+	&dev_attr_standby.attr,
 	NULL,
 };
 
@@ -94,6 +136,7 @@ static int pwm_servo_probe(struct platform_device *pdev)
 
 	servo->angle = 0;
 	servo->angle_duty = SERVO_MIN_DUTY;
+	servo->standby = 0;
 
 	error = pwm_config(servo->pwm, servo->angle_duty, SERVO_PWM_PERIOD);
 	if (error) {
