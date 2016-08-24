@@ -8,7 +8,7 @@
 
 #define SERVO_PWM_PERIOD  20000000
 #define SERVO_MAX_DUTY    2500000
-#define SERVO_MIN_DUTY    500000
+#define SERVO_MIN_DUTY    700000
 #define SERVO_DEGREE ((SERVO_MAX_DUTY - SERVO_MIN_DUTY) / 180)
 
 struct pwm_servo_data {
