@@ -79,9 +79,9 @@ static ssize_t pwm_servo_store_standby(struct device *dev,
 	if (tmp != 0 && tmp != 1)
 		return -EINVAL;
 
-	if (tmp == 0 && servo->standby != 0)
+	if (tmp == 1 && servo->standby != 1)
 		pwm_disable(servo->pwm);
-	else if (tmp == 1 && servo->standby != 1) {
+	else if (tmp == 0 && servo->standby != 0) {
 		error = pwm_enable(servo->pwm);
 		if (error)
 			return error;
