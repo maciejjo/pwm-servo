@@ -136,7 +136,7 @@ static int pwm_servo_probe(struct platform_device *pdev)
 
 	servo->angle = 0;
 	servo->angle_duty = SERVO_MIN_DUTY;
-	servo->standby = 0;
+	servo->standby = 1;
 
 	error = pwm_config(servo->pwm, servo->angle_duty, SERVO_PWM_PERIOD);
 	if (error) {
@@ -147,12 +147,6 @@ static int pwm_servo_probe(struct platform_device *pdev)
 	error = pwm_set_polarity(servo->pwm, PWM_POLARITY_NORMAL);
 	if (error) {
 		dev_err(&pdev->dev, "pwm_set_polarity() failed\n");
-		return error;
-	}
-
-	error = pwm_enable(servo->pwm);
-	if (error) {
-		dev_err(&pdev->dev, "pwm_enable() failed\n");
 		return error;
 	}
 
